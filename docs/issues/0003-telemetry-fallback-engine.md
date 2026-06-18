@@ -1,4 +1,4 @@
-# 0003: Telemetry Fallback Engine & User Visual State Inference
+# 0003: Telemetry Fallback Engine & User Visual State Inference — ✅ DONE
 
 ## What to build
 
@@ -6,14 +6,14 @@ Build the **Telemetry Fallback Engine** that tracks interaction telemetry (mouse
 
 ## Acceptance criteria
 
-- [ ] The fallback engine binds event listeners to `window` for `mousemove`, `scroll`, and `keydown`.
-- [ ] Calculate mouse velocity (pixels per second) and scroll acceleration to distinguish between:
+- [x] The fallback engine binds event listeners to `window` for `mousemove`, `scroll`, and `keydown`.
+- [x] Calculate mouse velocity (pixels per second) and scroll acceleration to distinguish between:
   - **Focus**: Linear scroll movements followed by pauses (reading pace).
   - **Skimming**: Rapid scrolling spikes and high-velocity mouse sweeps (e.g., > 1000px/s).
   - **Fatigue**: Extreme input inactivity or slow, erratic movement profiles.
-- [ ] A debounce/hysteresis queue ensures the target state is held continuously before queueing the transition (2 seconds for Focus/Skimming, 3 seconds for Fatigue).
-- [ ] The fallback engine automatically deactivates and cleans up event listeners when camera telemetry becomes active, and reactivates them when camera access is lost or denied.
-- [ ] Automated tests dispatch mock interaction events (e.g., high-frequency scroll wheel events) and verify that the SDK correctly infers the Skimming state and queues the appropriate Morph Mode shift.
+- [x] A debounce/hysteresis queue ensures the target state is held continuously before queueing the transition (2 seconds for Focus/Skimming, 3 seconds for Fatigue).
+- [x] The fallback engine automatically deactivates and cleans up event listeners when camera telemetry becomes active, and reactivates them when camera access is lost or denied.
+- [x] Automated tests dispatch mock interaction events (e.g., high-frequency scroll wheel events) and verify that the SDK correctly infers the Skimming state and queues the appropriate Morph Mode shift.
 
 ## Blocked by
 
