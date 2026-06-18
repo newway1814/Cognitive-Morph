@@ -41,11 +41,11 @@ The system ensures visual stability by executing reflows only at **Layout Reflow
 
 ## Testing Decisions
 
-* **Testing Seams**:
-  1. **Telemetry Injection Seam (Highest Seam)**: The SDK class exposes a public `.injectTelemetry(data)` method. This allows automated unit and integration tests (e.g., via Jest, Vitest) to bypass the webcam stream and MediaPipe FaceMesh dependency entirely by feeding mock **Gaze Dynamics**, eye aperture, and posture values directly into the state machine.
-  2. **Lifecycle Event Seam**: The SDK exposes lifecycle listeners (such as `.onStateChange(callback)` and `.onModeChange(callback)`) which are used to assert that simulated inputs result in correct state transitions.
-  3. **DOM Class Assertion Seam**: Tests will assert on the DOM state by checking that the appropriate global body class is applied and custom properties are updated when a simulated telemetry event triggers a reflow.
-* **Test Strategy**: Tests must focus on external behavioral contracts (telemetry inputs mapping to CSS class updates and lifecycle event triggers) rather than internal coordinate geometry or model worker loops.
+* **Unified Input-Output Testing Seam**: Rather than exposing test-specific injection methods or verifying internal state machines, the entire SDK will be verified using a single, high-level black-box seam:
+  1. **Input Interface**: The SDK constructor allows passing a custom, stubbed Web Worker object (`new CognitiveMorph({ worker: mockWorker })`). Test runners simulate camera telemetry by calling standard `postMessage` handlers on this mock object to emit mock eye apertures, blink intervals, yaw/pitch coordinates, and tracking occlusion events. Telemetry fallback is simulated by dispatching standard user interaction DOM events (mouse movement, scroll, keys) directly onto the test document.
+  2. **Output Verification Interface**: Test assertions are made exclusively against standard public side effects: the DOM state (verifying that the correct global classes like `cm-mode-focus-reading` are applied to the `<body>` element and custom properties are correctly set) and lifecycle listeners (asserting callbacks like `.onModeChange` fire with expected modes).
+* **Test Strategy**: Only test external behavioral contracts (mock worker messages or input DOM events mapping to body class updates and event callbacks) in standard headless testing environments (e.g., JSDOM in Jest or Vitest), keeping test files completely insulated from internal coordinate algorithms, model file compilation, or actual camera streaming.
+
 
 ## Out of Scope
 
