@@ -1,4 +1,4 @@
-# 0004: Layout Reflow Anchors & Scroll Anchoring
+# 0004: Layout Reflow Anchors & Scroll Anchoring — ✅ DONE
 
 ## What to build
 
@@ -6,12 +6,12 @@ Implement **Layout Reflow Anchors** and **Scroll Anchoring** to ensure visual st
 
 ## Acceptance criteria
 
-- [ ] A reflow blocker intercepts any queued Morph Mode change if the user is actively scrolling or if gaze metrics indicate eye movement.
-- [ ] The system detects **Layout Reflow Anchors** under two conditions:
+- [x] A reflow blocker intercepts any queued Morph Mode change if the user is actively scrolling or if gaze metrics indicate eye movement.
+- [x] The system detects **Layout Reflow Anchors** under two conditions:
   - Scroll velocity remains zero for a continuous 500ms.
   - A telemetry event reports an "extended blink" pause.
-- [ ] **Scroll Anchoring** dynamically calculates the vertical coordinate offset of the **Target Reading Element** relative to the viewport. When styling changes (like expanding font size in Fatigue Mitigation Mode) occur, the system adjusts the window scroll position to keep the text container pinned in the same visual location.
-- [ ] Automated tests simulate active scrolling, queue a Morph Mode shift, and verify the shift remains pending. The test then simulates a scroll pause and verifies the mode class is applied to the body, and the scroll position is updated to compensate for size adjustments.
+- [x] **Scroll Anchoring** dynamically calculates the vertical coordinate offset of the **Target Reading Element** relative to the viewport. When styling changes (like expanding font size in Fatigue Mitigation Mode) occur, the system adjusts the window scroll position to keep the text container pinned in the same visual location.
+- [x] Automated tests simulate active scrolling, queue a Morph Mode shift, and verify the shift remains pending. The test then simulates a scroll pause and verifies the mode class is applied to the body, and the scroll position is updated to compensate for size adjustments.
 
 ## Blocked by
 

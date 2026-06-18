@@ -5,6 +5,8 @@ import path from "node:path";
 
 const cssText = fs.readFileSync(path.resolve(__dirname, "cognitive-morph.css"), "utf8");
 
+vi.stubGlobal("scrollTo", vi.fn());
+
 // --- Test seam: mock Worker that tracks addEventListener/removeEventListener ---
 
 function createMockWorker() {
@@ -226,6 +228,12 @@ describe("Telemetry Fallback Engine", () => {
       window.dispatchEvent(event);
     }
 
+    // It should be deferred during active scrolling
+    expect(cm.currentMorphMode).not.toBe("skimming");
+
+    // Wait 500ms for the scroll pause Layout Reflow Anchor
+    vi.advanceTimersByTime(500);
+
     expect(cm.currentMorphMode).toBe("skimming");
 
     // Restore scrollY
@@ -289,5 +297,175 @@ describe("Telemetry Fallback Engine", () => {
 
     addSpy.mockRestore();
     removeSpy.mockRestore();
+  });
+});
+
+describe("Layout Reflow Anchors & Scroll Anchoring", () => {
+  let mockWorker: ReturnType<typeof createMockWorker>;
+  let cm: CognitiveMorph;
+
+  beforeEach(() => {
+    mockWorker = createMockWorker();
+    cm = new CognitiveMorph({ worker: mockWorker });
+  });
+
+  afterEach(() => {
+    cm.destroy();
+  });
+
+  it("blocks and defers Morph Mode changes while the user is actively scrolling, then applies after pause", () => {
+    vi.useFakeTimers();
+    cm.boot();
+
+    expect(cm.currentMorphMode).toBeNull();
+
+    // Simulate active scrolling
+    const scrollEvent = new Event("scroll");
+    window.dispatchEvent(scrollEvent);
+
+    // Trigger a mode change via telemetry message
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "focus-reading" });
+
+    // Verify that the morph mode remains null because the transition is deferred
+    expect(cm.currentMorphMode).toBeNull();
+
+    // Advance timer by 499ms - should still be pending
+    vi.advanceTimersByTime(499);
+    expect(cm.currentMorphMode).toBeNull();
+
+    // Advance by 1ms (total 500ms pause) - should trigger reflow anchor
+    vi.advanceTimersByTime(1);
+    expect(cm.currentMorphMode).toBe("focus-reading");
+
+    vi.useRealTimers();
+  });
+
+  it("applies pending Morph Mode immediately when a telemetry event reports an extendedBlink pause", () => {
+    vi.useFakeTimers();
+    cm.boot();
+
+    expect(cm.currentMorphMode).toBeNull();
+
+    // Simulate active scrolling to queue/block the transition
+    const scrollEvent = new Event("scroll");
+    window.dispatchEvent(scrollEvent);
+
+    // Queue a mode change
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "focus-reading" });
+    expect(cm.currentMorphMode).toBeNull();
+
+    // Emit an extended blink event
+    mockWorker._emit("message", { type: "extendedBlink" });
+
+    // It should apply immediately without waiting for scroll timer
+    expect(cm.currentMorphMode).toBe("focus-reading");
+
+    vi.useRealTimers();
+  });
+
+  it("blocks transitions during active eye movement and applies them when eye movement stops", () => {
+    cm.boot();
+
+    expect(cm.currentMorphMode).toBeNull();
+
+    // Emit gaze telemetry with eyeMovement = true
+    mockWorker._emit("message", { type: "gazeUpdate", eyeMovement: true });
+
+    // Queue a morph mode change
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "skimming" });
+
+    // Verify it is blocked
+    expect(cm.currentMorphMode).toBeNull();
+
+    // Emit gaze telemetry with eyeMovement = false
+    mockWorker._emit("message", { type: "gazeUpdate", eyeMovement: false });
+
+    // Verify it is applied immediately now that eye movement stopped
+    expect(cm.currentMorphMode).toBe("skimming");
+  });
+
+  it("applies Scroll Anchoring scroll compensation relative to data-morph='main' target element", () => {
+    cm.boot();
+
+    // Create target element
+    const mainEl = document.createElement("article");
+    mainEl.setAttribute("data-morph", "main");
+    document.body.appendChild(mainEl);
+
+    // Mock initial scrollY
+    const originalScrollY = window.scrollY;
+    Object.defineProperty(window, "scrollY", {
+      value: 200,
+      writable: true,
+      configurable: true,
+    });
+
+    // Mock getBoundingClientRect call sequence
+    let callCount = 0;
+    const getBoundingClientRectSpy = vi.spyOn(mainEl, "getBoundingClientRect").mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        // Before transition: top is 100px from viewport
+        return { top: 100 } as DOMRect;
+      } else {
+        // After transition: top is 150px from viewport (layout shifted down by 50px)
+        return { top: 150 } as DOMRect;
+      }
+    });
+
+    const scrollToSpy = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+
+    // Trigger transition
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "focus-reading" });
+
+    // We expect window.scrollTo to be called to adjust the scroll by +50px (new scrollY = 250)
+    expect(scrollToSpy).toHaveBeenCalledWith(window.scrollX, 250);
+
+    // Cleanup
+    mainEl.remove();
+    getBoundingClientRectSpy.mockRestore();
+    scrollToSpy.mockRestore();
+    Object.defineProperty(window, "scrollY", {
+      value: originalScrollY,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  it("does not block transitions when scroll events are triggered programmatically by scroll anchoring", () => {
+    cm.boot();
+
+    // Create target element
+    const mainEl = document.createElement("article");
+    mainEl.setAttribute("data-morph", "main");
+    document.body.appendChild(mainEl);
+
+    // Mock getBoundingClientRect to trigger scroll compensation
+    let callCount = 0;
+    const getBoundingClientRectSpy = vi.spyOn(mainEl, "getBoundingClientRect").mockImplementation(() => {
+      callCount++;
+      return { top: callCount === 1 ? 100 : 150 } as DOMRect;
+    });
+
+    const scrollToSpy = vi.spyOn(window, "scrollTo").mockImplementation(() => {
+      // Simulate browser firing scroll event synchronously in response to scrollTo
+      const scrollEvent = new Event("scroll");
+      window.dispatchEvent(scrollEvent);
+    });
+
+    // Trigger first transition to focus-reading
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "focus-reading" });
+    expect(cm.currentMorphMode).toBe("focus-reading");
+
+    // Trigger second transition immediately to skimming
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "skimming" });
+
+    // It should NOT be blocked by the scroll event from scroll anchoring
+    expect(cm.currentMorphMode).toBe("skimming");
+
+    // Cleanup
+    mainEl.remove();
+    getBoundingClientRectSpy.mockRestore();
+    scrollToSpy.mockRestore();
   });
 });
