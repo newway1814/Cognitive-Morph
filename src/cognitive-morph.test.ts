@@ -879,7 +879,7 @@ describe("Telemetry Status Widget & Hybrid Settings Persistence", () => {
     expect(document.body.classList.contains("cm-mode-skimming")).toBe(true);
   });
 
-  it("updates widget styling and text on calibration progress changes", () => {
+  it("updates widget styling and text on calibration progress changes", async () => {
     cm = new CognitiveMorph({ worker: mockWorker });
     cm.boot();
 
@@ -899,7 +899,8 @@ describe("Telemetry Status Widget & Hybrid Settings Persistence", () => {
 
     // Complete calibration (null)
     cm.setCalibrationProgress(null);
-    cm.setCameraActive(true);
+    await cm.setCameraActive(true);
+    cm.setCalibrationProgress(null);
     expect(label!.textContent).toBe("Active");
     expect(indicator!.classList.contains("cm-status-active")).toBe(true);
 

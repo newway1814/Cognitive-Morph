@@ -28,6 +28,18 @@ export class CognitiveMorph {
   private cameraStream: MediaStream | null = null;
   private hiddenVideo: HTMLVideoElement | null = null;
 
+  // Calibration and Baseline State
+  private calibrationStartTime: number | null = null;
+  private calibrationEyeApertures: number[] = [];
+  private calibrationBlinkIntervals: number[] = [];
+  private calibrationYaws: number[] = [];
+  private calibrationPitches: number[] = [];
+
+  private baselineEyeAperture: number | null = null;
+  private baselineBlinkInterval: number | null = null;
+  private baselineYaw: number | null = null;
+  private baselinePitch: number | null = null;
+
   // Reflow blocker state variables
   private isActivelyScrolling = false;
   private isEyeMovementActive = false;
@@ -125,6 +137,38 @@ export class CognitiveMorph {
   boot(): void {
     this.handleMessage = (event: MessageEvent) => {
       if (this._paused) return;
+
+      if (event.data && (event.data.landmarks !== undefined || event.data.confidence !== undefined || event.data.type === "telemetry")) {
+        const landmarks = event.data.landmarks ?? [];
+        const confidence = event.data.confidence ?? 0;
+        this.telemetryListeners.forEach((cb) => cb({ landmarks, confidence }));
+      }
+
+      if (this._calibrationProgress !== null) {
+        const elapsed = Date.now() - (this.calibrationStartTime ?? Date.now());
+
+        const { eyeAperture, blinkInterval, yaw, pitch } = event.data ?? {};
+        if (eyeAperture !== undefined) this.calibrationEyeApertures.push(eyeAperture);
+        if (blinkInterval !== undefined) this.calibrationBlinkIntervals.push(blinkInterval);
+        if (yaw !== undefined) this.calibrationYaws.push(yaw);
+        if (pitch !== undefined) this.calibrationPitches.push(pitch);
+
+        if (elapsed < 10000) {
+          const progress = Math.min(99, Math.floor((elapsed / 10000) * 100));
+          this.setCalibrationProgress(progress);
+          return;
+        } else {
+          const avg = (arr: number[]) => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+          this.baselineEyeAperture = avg(this.calibrationEyeApertures);
+          this.baselineBlinkInterval = avg(this.calibrationBlinkIntervals);
+          this.baselineYaw = avg(this.calibrationYaws);
+          this.baselinePitch = avg(this.calibrationPitches);
+
+          this.setCalibrationProgress(null);
+          return;
+        }
+      }
+
       const { type, morphMode, eyeMovement } = event.data ?? {};
       if (type === "extendedBlink") {
         this.triggerReflowAnchor();
@@ -137,11 +181,6 @@ export class CognitiveMorph {
       }
       if (type === "morphModeChange" && morphMode) {
         this.transitionToMorphMode(morphMode);
-      }
-      if (event.data && (event.data.landmarks !== undefined || event.data.confidence !== undefined || event.data.type === "telemetry")) {
-        const landmarks = event.data.landmarks ?? [];
-        const confidence = event.data.confidence ?? 0;
-        this.telemetryListeners.forEach((cb) => cb({ landmarks, confidence }));
       }
     };
     if (this.worker) {
@@ -175,6 +214,13 @@ export class CognitiveMorph {
     this._cameraActive = active;
 
     if (active) {
+      this.calibrationStartTime = Date.now();
+      this.calibrationEyeApertures = [];
+      this.calibrationBlinkIntervals = [];
+      this.calibrationYaws = [];
+      this.calibrationPitches = [];
+      this.setCalibrationProgress(0);
+
       if (!this.worker) {
         this.worker = this.spawnWorker();
         this.bindWorkerListener();
@@ -196,12 +242,23 @@ export class CognitiveMorph {
         console.error("Camera access denied or failed:", err);
         this._cameraActive = false;
         this.cleanupWorker();
+        this.setCalibrationProgress(null);
         this.updateWidgetUI();
         throw err;
       }
     } else {
       this.cleanupCamera();
       this.cleanupWorker();
+      this.calibrationStartTime = null;
+      this.calibrationEyeApertures = [];
+      this.calibrationBlinkIntervals = [];
+      this.calibrationYaws = [];
+      this.calibrationPitches = [];
+      this.baselineEyeAperture = null;
+      this.baselineBlinkInterval = null;
+      this.baselineYaw = null;
+      this.baselinePitch = null;
+      this.setCalibrationProgress(null);
     }
 
     this.syncFallbackEngineState();
