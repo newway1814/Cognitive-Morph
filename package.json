@@ -1,0 +1,32 @@
+{
+  "name": "cognitive-morph",
+  "version": "0.1.0",
+  "description": "Attention-Aware Frontend UI System — adapts layout to the user's active Visual State",
+  "type": "module",
+  "main": "./dist/cognitive-morph.umd.cjs",
+  "module": "./dist/cognitive-morph.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/cognitive-morph.js",
+      "require": "./dist/cognitive-morph.umd.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vite-plugin-dts": "^4.5.4",
+    "vitest": "^3.2.1"
+  },
+  "license": "MIT"
+}
