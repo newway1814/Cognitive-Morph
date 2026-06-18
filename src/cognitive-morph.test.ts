@@ -1,5 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { CognitiveMorph } from "./index";
+import fs from "node:fs";
+import path from "node:path";
+
+const cssText = fs.readFileSync(path.resolve(__dirname, "cognitive-morph.css"), "utf8");
 
 // --- Test seam: mock Worker that tracks addEventListener/removeEventListener ---
 
@@ -74,5 +78,76 @@ describe("CognitiveMorph SDK bootstrap", () => {
     expect(cm.currentMorphMode).toBe("fatigue-mitigation");
 
     cm.destroy();
+  });
+});
+
+describe("Declarative Markup & Global CSS State Toggling", () => {
+  let mockWorker: ReturnType<typeof createMockWorker>;
+  let cm: CognitiveMorph;
+
+  beforeEach(() => {
+    document.body.className = "";
+    mockWorker = createMockWorker();
+    cm = new CognitiveMorph({ worker: mockWorker });
+    cm.boot();
+  });
+
+  afterEach(() => {
+    cm.destroy();
+  });
+
+  it("applies cm-mode-* class to body on Morph Mode change", () => {
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "focus-reading" });
+
+    expect(document.body.classList.contains("cm-mode-focus-reading")).toBe(true);
+  });
+
+  it("enforces Single Active Morph Mode Invariant — removes previous mode class", () => {
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "focus-reading" });
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "skimming" });
+
+    expect(document.body.classList.contains("cm-mode-skimming")).toBe(true);
+    expect(document.body.classList.contains("cm-mode-focus-reading")).toBe(false);
+  });
+
+  it("destroy() removes active Morph Mode class from body", () => {
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "fatigue-mitigation" });
+    expect(document.body.classList.contains("cm-mode-fatigue-mitigation")).toBe(true);
+
+    cm.destroy();
+
+    expect(document.body.classList.contains("cm-mode-fatigue-mitigation")).toBe(false);
+    expect(document.body.className).toBe("");
+  });
+
+  it("CSS custom properties resolve to correct values per Morph Mode", () => {
+    // Inject the SDK stylesheet as inline <style> (JSDOM resolves inline styles)
+    const style = document.createElement("style");
+    style.textContent = cssText;
+    document.head.appendChild(style);
+
+    // Create declarative markup
+    const main = document.createElement("article");
+    main.setAttribute("data-morph", "main");
+    const peripheral = document.createElement("aside");
+    peripheral.setAttribute("data-morph", "peripheral");
+    document.body.appendChild(main);
+    document.body.appendChild(peripheral);
+
+    // Trigger Focus Reading Morph Mode
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "focus-reading" });
+
+    // Verify custom properties on peripheral element
+    const peripheralStyles = getComputedStyle(peripheral);
+    expect(peripheralStyles.getPropertyValue("--cm-opacity").trim()).toBe("0.1");
+
+    // Verify custom properties on main element
+    const mainStyles = getComputedStyle(main);
+    expect(mainStyles.getPropertyValue("--cm-font-size").trim()).not.toBe("");
+
+    // Cleanup injected DOM
+    main.remove();
+    peripheral.remove();
+    style.remove();
   });
 });

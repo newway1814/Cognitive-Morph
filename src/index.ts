@@ -26,7 +26,11 @@ export class CognitiveMorph {
     this.handleMessage = (event: MessageEvent) => {
       const { type, morphMode } = event.data ?? {};
       if (type === "morphModeChange" && morphMode) {
+        if (this._morphMode) {
+          document.body.classList.remove(`cm-mode-${this._morphMode}`);
+        }
         this._morphMode = morphMode;
+        document.body.classList.add(`cm-mode-${morphMode}`);
         this.morphModeListeners.forEach((cb) => cb(morphMode));
       }
     };
@@ -43,6 +47,10 @@ export class CognitiveMorph {
         this.handleMessage as EventListener,
       );
       this.handleMessage = null;
+    }
+    if (this._morphMode) {
+      document.body.classList.remove(`cm-mode-${this._morphMode}`);
+      this._morphMode = null;
     }
   }
 }
