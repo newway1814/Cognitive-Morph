@@ -1,4 +1,5 @@
 import { TelemetryFallbackEngine } from "./fallback-engine";
+import { workerCode } from "./worker-template";
 
 const MORPH_MODE_NAMES: Record<string, string> = {
   "focus-reading": "Focus Reading Mode",
@@ -7,15 +8,16 @@ const MORPH_MODE_NAMES: Record<string, string> = {
 };
 
 export interface CognitiveMorphOptions {
-  worker: Worker;
+  worker?: Worker;
   transitionDurationMs?: number;
 }
 
 export type MorphModeCallback = (morphMode: string) => void;
 
 export class CognitiveMorph {
-  private readonly worker: Worker;
+  private worker: Worker | null = null;
   private readonly morphModeListeners = new Set<MorphModeCallback>();
+  private readonly telemetryListeners = new Set<(data: { landmarks: any[]; confidence: number }) => void>();
   private readonly fallbackEngine: TelemetryFallbackEngine;
   private handleMessage: ((event: MessageEvent) => void) | null = null;
   private _morphMode: string | null = null;
@@ -23,6 +25,8 @@ export class CognitiveMorph {
   private _paused = false;
   private _manualLock: string | null = null;
   private _calibrationProgress: number | null = null;
+  private cameraStream: MediaStream | null = null;
+  private hiddenVideo: HTMLVideoElement | null = null;
 
   // Reflow blocker state variables
   private isActivelyScrolling = false;
@@ -85,7 +89,7 @@ export class CognitiveMorph {
   }
 
   constructor(options: CognitiveMorphOptions) {
-    this.worker = options.worker;
+    this.worker = options.worker ?? null;
     this.transitionDurationMs = options.transitionDurationMs ?? 3000;
     this.fallbackEngine = new TelemetryFallbackEngine((userVisualState) => {
       // Map User Visual State to Morph Mode
@@ -104,6 +108,20 @@ export class CognitiveMorph {
     this.morphModeListeners.add(callback);
   }
 
+  onTelemetry(callback: (data: { landmarks: any[]; confidence: number }) => void): () => void {
+    this.telemetryListeners.add(callback);
+    return () => {
+      this.telemetryListeners.delete(callback);
+    };
+  }
+
+  private bindWorkerListener(): void {
+    if (this.worker && this.handleMessage) {
+      this.worker.removeEventListener("message", this.handleMessage as EventListener);
+      this.worker.addEventListener("message", this.handleMessage as EventListener);
+    }
+  }
+
   boot(): void {
     this.handleMessage = (event: MessageEvent) => {
       if (this._paused) return;
@@ -120,11 +138,15 @@ export class CognitiveMorph {
       if (type === "morphModeChange" && morphMode) {
         this.transitionToMorphMode(morphMode);
       }
+      if (event.data && (event.data.landmarks !== undefined || event.data.confidence !== undefined || event.data.type === "telemetry")) {
+        const landmarks = event.data.landmarks ?? [];
+        const confidence = event.data.confidence ?? 0;
+        this.telemetryListeners.forEach((cb) => cb({ landmarks, confidence }));
+      }
     };
-    this.worker.addEventListener(
-      "message",
-      this.handleMessage as EventListener,
-    );
+    if (this.worker) {
+      this.bindWorkerListener();
+    }
 
     const savedPaused = localStorage.getItem("cm-paused");
     if (savedPaused === "true") {
@@ -148,9 +170,39 @@ export class CognitiveMorph {
     this.renderStatusWidget();
   }
 
-  setCameraActive(active: boolean): void {
+  async setCameraActive(active: boolean): Promise<void> {
     if (this._cameraActive === active) return;
     this._cameraActive = active;
+
+    if (active) {
+      if (!this.worker) {
+        this.worker = this.spawnWorker();
+        this.bindWorkerListener();
+      }
+      try {
+        let stream: MediaStream | null = null;
+        if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function") {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        }
+        this.cameraStream = stream;
+        if (stream) {
+          this.initCameraStream(stream);
+          this.startCaptureLoop();
+        }
+        if (this.worker) {
+          this.worker.postMessage({ type: "start" });
+        }
+      } catch (err) {
+        console.error("Camera access denied or failed:", err);
+        this._cameraActive = false;
+        this.cleanupWorker();
+        this.updateWidgetUI();
+        throw err;
+      }
+    } else {
+      this.cleanupCamera();
+      this.cleanupWorker();
+    }
 
     this.syncFallbackEngineState();
     this.updateWidgetUI();
@@ -251,13 +303,9 @@ export class CognitiveMorph {
 
   destroy(): void {
     this.cancelTransition();
-    if (this.handleMessage) {
-      this.worker.removeEventListener(
-        "message",
-        this.handleMessage as EventListener,
-      );
-      this.handleMessage = null;
-    }
+    this.cleanupCamera();
+    this.cleanupWorker();
+    this.handleMessage = null;
     this.fallbackEngine.deactivate();
     window.removeEventListener("scroll", this.handleScrollActivity);
     if (this.scrollPauseTimer) {
@@ -481,6 +529,79 @@ export class CognitiveMorph {
     } else {
       const widget = document.querySelector(".cm-status-widget");
       if (widget) widget.remove();
+    }
+  }
+
+  private spawnWorker(): Worker {
+    const blob = new Blob([workerCode], { type: "application/javascript" });
+    const url = URL.createObjectURL(blob);
+    return new Worker(url);
+  }
+
+  private initCameraStream(stream: MediaStream): void {
+    const video = document.createElement("video");
+    video.style.display = "none";
+    video.srcObject = stream;
+    video.autoplay = true;
+    video.playsInline = true;
+    document.body.appendChild(video);
+    this.hiddenVideo = video;
+    video.play().catch(err => console.error("Error playing video:", err));
+  }
+
+  private cleanupCamera(): void {
+    if (this.cameraStream) {
+      this.cameraStream.getTracks().forEach((track) => track.stop());
+      this.cameraStream = null;
+    }
+    if (this.hiddenVideo) {
+      this.hiddenVideo.remove();
+      this.hiddenVideo = null;
+    }
+  }
+
+  private cleanupWorker(): void {
+    this.stopCaptureLoop();
+    if (this.worker) {
+      if (this.handleMessage) {
+        this.worker.removeEventListener(
+          "message",
+          this.handleMessage as EventListener,
+        );
+      }
+      this.worker.terminate();
+      this.worker = null;
+    }
+  }
+
+  private captureIntervalId: any = null;
+
+  private startCaptureLoop(): void {
+    this.stopCaptureLoop();
+    this.captureIntervalId = setInterval(() => {
+      this.captureFrame();
+    }, 100);
+  }
+
+  private stopCaptureLoop(): void {
+    if (this.captureIntervalId) {
+      clearInterval(this.captureIntervalId);
+      this.captureIntervalId = null;
+    }
+  }
+
+  private captureFrame(): void {
+    if (!this.worker || !this.hiddenVideo || !this._cameraActive) return;
+    if (typeof createImageBitmap === "function") {
+      if (this.hiddenVideo.readyState >= 2) {
+        createImageBitmap(this.hiddenVideo).then((bitmap) => {
+          if (this.worker && this._cameraActive) {
+            this.worker.postMessage({ image: bitmap }, [bitmap]);
+          } else {
+            bitmap.close();
+          }
+        }).catch(() => {});
+      }
     }
   }
 }

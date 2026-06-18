@@ -81,6 +81,89 @@ describe("CognitiveMorph SDK bootstrap", () => {
 
     cm.destroy();
   });
+
+  it("implements the calibration state machine and locks baseline averages after 10 seconds of camera activation", async () => {
+    vi.useFakeTimers();
+
+    const mockWorkerInstance = createMockWorker();
+    const cm = new CognitiveMorph({ worker: mockWorkerInstance, transitionDurationMs: 0 });
+
+    const morphModeSpy = vi.fn();
+    cm.onMorphModeChange(morphModeSpy);
+    cm.boot();
+
+    await cm.setCameraActive(true);
+
+    const widgetLabel = document.querySelector(".cm-status-label");
+    const widgetIndicator = document.querySelector(".cm-status-indicator");
+    expect(widgetLabel?.textContent).toBe("Calibrating 0%");
+    expect(widgetIndicator?.classList.contains("cm-status-calibrating")).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(2000);
+    mockWorkerInstance._emit("message", {
+      type: "telemetry",
+      eyeAperture: 0.4,
+      blinkInterval: 4000,
+      yaw: 10,
+      pitch: 5,
+      confidence: 1.0,
+      morphMode: "focus-reading"
+    });
+
+    expect(widgetLabel?.textContent).toBe("Calibrating 20%");
+    expect(cm.currentMorphMode).toBeNull();
+    expect(morphModeSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(3000);
+    mockWorkerInstance._emit("message", {
+      type: "telemetry",
+      eyeAperture: 0.3,
+      blinkInterval: 5000,
+      yaw: 12,
+      pitch: 7,
+      confidence: 1.0
+    });
+    expect(widgetLabel?.textContent).toBe("Calibrating 50%");
+
+    await vi.advanceTimersByTimeAsync(4900);
+    mockWorkerInstance._emit("message", {
+      type: "telemetry",
+      eyeAperture: 0.5,
+      blinkInterval: 3000,
+      yaw: 8,
+      pitch: 3,
+      confidence: 1.0
+    });
+    expect(widgetLabel?.textContent).toBe("Calibrating 99%");
+
+    await vi.advanceTimersByTimeAsync(200);
+    mockWorkerInstance._emit("message", {
+      type: "telemetry",
+      eyeAperture: 0.4,
+      blinkInterval: 4000,
+      yaw: 10,
+      pitch: 5,
+      confidence: 1.0
+    });
+
+    expect(widgetLabel?.textContent).toBe("Active");
+    expect(widgetIndicator?.classList.contains("cm-status-active")).toBe(true);
+
+    expect((cm as any).baselineEyeAperture).toBeCloseTo(0.4);
+    expect((cm as any).baselineBlinkInterval).toBeCloseTo(4000);
+    expect((cm as any).baselineYaw).toBeCloseTo(10);
+    expect((cm as any).baselinePitch).toBeCloseTo(5);
+
+    mockWorkerInstance._emit("message", {
+      type: "morphModeChange",
+      morphMode: "focus-reading"
+    });
+    expect(cm.currentMorphMode).toBe("focus-reading");
+    expect(morphModeSpy).toHaveBeenCalledWith("focus-reading");
+
+    cm.destroy();
+    vi.useRealTimers();
+  });
 });
 
 describe("Declarative Markup & Global CSS State Toggling", () => {
@@ -847,6 +930,165 @@ describe("Telemetry Status Widget & Hybrid Settings Persistence", () => {
     cm2.destroy();
   });
 });
+
+describe("Background Web Worker Pipeline & MediaPipe Lazy Loading", () => {
+  let mockStream: any;
+  let getUserMediaSpy: any;
+  let mockWorkerConstructorSpy: any;
+
+  beforeEach(() => {
+    mockStream = {
+      getTracks: vi.fn().mockReturnValue([
+        { stop: vi.fn() }
+      ]),
+    };
+    
+    // Stub getUserMedia
+    getUserMediaSpy = vi.fn().mockResolvedValue(mockStream);
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        getUserMedia: getUserMediaSpy,
+      },
+    });
+
+    // Stub window.Worker
+    mockWorkerConstructorSpy = vi.fn().mockImplementation(() => createMockWorker());
+    vi.stubGlobal("Worker", mockWorkerConstructorSpy);
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn().mockReturnValue("blob:mock-worker-url"),
+    });
+
+    // Mock HTMLVideoElement methods to prevent JSDOM issues
+    vi.spyOn(HTMLVideoElement.prototype, "play").mockImplementation(async () => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("spawns a Web Worker lazily and requests camera access when setCameraActive(true) is called", async () => {
+    // Instantiate WITHOUT worker to test lazy worker creation
+    const cm = new CognitiveMorph({ transitionDurationMs: 0 } as any);
+    cm.boot();
+
+    expect(mockWorkerConstructorSpy).not.toHaveBeenCalled();
+    expect(getUserMediaSpy).not.toHaveBeenCalled();
+
+    // Call setCameraActive(true)
+    await cm.setCameraActive(true);
+
+    // Verify worker is spawned
+    expect(mockWorkerConstructorSpy).toHaveBeenCalled();
+    // Verify getUserMedia is called
+    expect(getUserMediaSpy).toHaveBeenCalledWith({ video: true });
+    
+    cm.destroy();
+  });
+
+  it("publishes telemetry tracking metrics from the worker to the SDK's registered listeners", async () => {
+    const mockWorkerInstance = createMockWorker();
+    const cm = new CognitiveMorph({ worker: mockWorkerInstance, transitionDurationMs: 0 });
+    
+    const telemetrySpy = vi.fn();
+    const unsubscribe = cm.onTelemetry(telemetrySpy);
+    
+    cm.boot();
+    await cm.setCameraActive(true);
+
+    const mockTelemetryData = {
+      type: "telemetry",
+      landmarks: [{ x: 10, y: 20, z: 30 }],
+      confidence: 0.95
+    };
+    mockWorkerInstance._emit("message", mockTelemetryData);
+
+    expect(telemetrySpy).toHaveBeenCalledTimes(1);
+    expect(telemetrySpy).toHaveBeenCalledWith({
+      landmarks: mockTelemetryData.landmarks,
+      confidence: mockTelemetryData.confidence
+    });
+
+    unsubscribe();
+    telemetrySpy.mockClear();
+    mockWorkerInstance._emit("message", mockTelemetryData);
+    expect(telemetrySpy).not.toHaveBeenCalled();
+
+    cm.destroy();
+  });
+
+  it("captures and posts camera frames to the worker at a throttled rate", async () => {
+    vi.useFakeTimers();
+
+    const mockWorkerInstance = createMockWorker();
+    const cm = new CognitiveMorph({ worker: mockWorkerInstance, transitionDurationMs: 0 });
+
+    Object.defineProperty(HTMLVideoElement.prototype, "readyState", {
+      value: 4,
+      writable: true,
+      configurable: true,
+    });
+
+    const mockBitmap = { close: vi.fn() };
+    const createImageBitmapSpy = vi.fn().mockResolvedValue(mockBitmap);
+    vi.stubGlobal("createImageBitmap", createImageBitmapSpy);
+
+    cm.boot();
+    await cm.setCameraActive(true);
+
+    expect(mockWorkerInstance.postMessage).toHaveBeenCalledWith({ type: "start" });
+    mockWorkerInstance.postMessage.mockClear();
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(createImageBitmapSpy).toHaveBeenCalledTimes(1);
+    expect(mockWorkerInstance.postMessage).toHaveBeenCalledWith({ image: mockBitmap }, [mockBitmap]);
+
+    mockWorkerInstance.postMessage.mockClear();
+    createImageBitmapSpy.mockClear();
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(createImageBitmapSpy).toHaveBeenCalledTimes(5);
+    expect(mockWorkerInstance.postMessage).toHaveBeenCalledTimes(5);
+
+    cm.destroy();
+    vi.useRealTimers();
+  });
+
+  it("terminates worker and stops camera tracks on setCameraActive(false) and destroy()", async () => {
+    const cm = new CognitiveMorph({ transitionDurationMs: 0 } as any);
+    cm.boot();
+
+    await cm.setCameraActive(true);
+
+    const activeWorker = (cm as any).worker;
+    expect(activeWorker).toBeDefined();
+    expect(activeWorker.terminate).not.toHaveBeenCalled();
+
+    const activeStream = (cm as any).cameraStream;
+    expect(activeStream).toBeDefined();
+    const mockTrack = activeStream.getTracks()[0];
+    expect(mockTrack.stop).not.toHaveBeenCalled();
+
+    expect(document.querySelector("video")).not.toBeNull();
+
+    await cm.setCameraActive(false);
+
+    expect(activeWorker.terminate).toHaveBeenCalled();
+    expect(mockTrack.stop).toHaveBeenCalled();
+    expect(document.querySelector("video")).toBeNull();
+
+    cm.destroy();
+  });
+
+  it("Web Worker template contains dynamic loading of MediaPipe FaceMesh from CDN", async () => {
+    const { workerCode } = await import("./worker-template");
+    expect(workerCode).toContain("importScripts");
+    expect(workerCode).toContain("https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js");
+    expect(workerCode).toContain("FaceMesh");
+    expect(workerCode).toContain("onmessage");
+  });
+});
+
 
 
 
