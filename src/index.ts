@@ -40,6 +40,12 @@ export class CognitiveMorph {
   private baselineYaw: number | null = null;
   private baselinePitch: number | null = null;
 
+  // Face Occlusion & Off-Axis Fallback State
+  private isFaceOccluded = false;
+  private isOccludedFallbackActive = false;
+  private isOffAxisFallbackActive = false;
+  private occlusionTimer: any = null;
+
   // Reflow blocker state variables
   private isActivelyScrolling = false;
   private isEyeMovementActive = false;
@@ -144,6 +150,35 @@ export class CognitiveMorph {
         this.telemetryListeners.forEach((cb) => cb({ landmarks, confidence }));
       }
 
+      if (event.data && event.data.confidence !== undefined) {
+        const confidence = event.data.confidence;
+        if (confidence < 0.5) {
+          this.isFaceOccluded = true;
+          this.cancelTransition();
+          this.pendingMorphMode = null;
+          if (!this.occlusionTimer) {
+            this.occlusionTimer = setTimeout(() => {
+              this.isOccludedFallbackActive = true;
+              this.syncFallbackEngineState();
+            }, 5000);
+          }
+        } else {
+          this.isFaceOccluded = false;
+          if (this.occlusionTimer) {
+            clearTimeout(this.occlusionTimer);
+            this.occlusionTimer = null;
+          }
+          if (this.isOccludedFallbackActive) {
+            this.isOccludedFallbackActive = false;
+            this.syncFallbackEngineState();
+          }
+        }
+      }
+
+      if (this.isFaceOccluded) {
+        return;
+      }
+
       if (this._calibrationProgress !== null) {
         const elapsed = Date.now() - (this.calibrationStartTime ?? Date.now());
 
@@ -167,6 +202,28 @@ export class CognitiveMorph {
           this.setCalibrationProgress(null);
           return;
         }
+      }
+
+      if (event.data && (event.data.yaw !== undefined || event.data.pitch !== undefined)) {
+        const { yaw, pitch } = event.data;
+        const relativeYaw = (yaw ?? 0) - (this.baselineYaw ?? 0);
+        const relativePitch = (pitch ?? 0) - (this.baselinePitch ?? 0);
+
+        if (Math.abs(relativeYaw) > 30 || Math.abs(relativePitch) > 30) {
+          if (!this.isOffAxisFallbackActive) {
+            this.isOffAxisFallbackActive = true;
+            this.syncFallbackEngineState();
+          }
+        } else {
+          if (this.isOffAxisFallbackActive) {
+            this.isOffAxisFallbackActive = false;
+            this.syncFallbackEngineState();
+          }
+        }
+      }
+
+      if (this.isOffAxisFallbackActive) {
+        return;
       }
 
       const { type, morphMode, eyeMovement } = event.data ?? {};
@@ -302,7 +359,7 @@ export class CognitiveMorph {
   private syncFallbackEngineState(): void {
     const shouldActivate =
       this.handleMessage &&
-      !this._cameraActive &&
+      (!this._cameraActive || this.isOccludedFallbackActive || this.isOffAxisFallbackActive) &&
       !this._paused &&
       !this._manualLock;
     if (shouldActivate) {
@@ -619,6 +676,13 @@ export class CognitiveMorph {
 
   private cleanupWorker(): void {
     this.stopCaptureLoop();
+    if (this.occlusionTimer) {
+      clearTimeout(this.occlusionTimer);
+      this.occlusionTimer = null;
+    }
+    this.isFaceOccluded = false;
+    this.isOccludedFallbackActive = false;
+    this.isOffAxisFallbackActive = false;
     if (this.worker) {
       if (this.handleMessage) {
         this.worker.removeEventListener(

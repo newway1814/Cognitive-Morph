@@ -1090,6 +1090,163 @@ describe("Background Web Worker Pipeline & MediaPipe Lazy Loading", () => {
   });
 });
 
+describe("Face Occlusion & Off-Axis Adaptive Baselines", () => {
+  let mockWorker: any;
+  let mockStream: any;
+  let getUserMediaSpy: any;
+
+  beforeEach(() => {
+    mockWorker = createMockWorker();
+    mockStream = {
+      getTracks: vi.fn().mockReturnValue([
+        { stop: vi.fn() }
+      ]),
+    };
+    
+    // Stub getUserMedia
+    getUserMediaSpy = vi.fn().mockResolvedValue(mockStream);
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        getUserMedia: getUserMediaSpy,
+      },
+    });
+
+    // Mock HTMLVideoElement play
+    vi.spyOn(HTMLVideoElement.prototype, "play").mockImplementation(async () => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("handles Face Occlusion: cancels pending transitions and falls back to fallback engine after 5 seconds", async () => {
+    vi.useFakeTimers();
+
+    const addSpy = vi.spyOn(window, "addEventListener");
+    const removeSpy = vi.spyOn(window, "removeEventListener");
+
+    const cm = new CognitiveMorph({ worker: mockWorker, transitionDurationMs: 3000 });
+    cm.boot();
+
+    // 1. Enable camera and fast-forward 10s calibration period
+    await cm.setCameraActive(true);
+    await vi.advanceTimersByTimeAsync(10000);
+    // Complete calibration manually by sending a completing message
+    mockWorker._emit("message", {
+      type: "telemetry",
+      eyeAperture: 0.4,
+      blinkInterval: 4000,
+      yaw: 10,
+      pitch: 5,
+      confidence: 1.0
+    });
+    
+    // Fallback engine should be deactivated since camera is active and not occluded
+    expect(removeSpy).toHaveBeenCalledWith("mousemove", expect.any(Function));
+    addSpy.mockClear();
+    removeSpy.mockClear();
+
+    // 2. Queue a transition by sending a morphModeChange message
+    mockWorker._emit("message", {
+      type: "morphModeChange",
+      morphMode: "focus-reading"
+    });
+
+    // Transition Preview Toast should be in DOM, transition deferred
+    expect(document.querySelector(".cm-transition-toast")).not.toBeNull();
+    expect(cm.currentMorphMode).toBeNull();
+
+    // 3. Emit low confidence (Face Occlusion)
+    mockWorker._emit("message", {
+      type: "telemetry",
+      confidence: 0.2
+    });
+
+    // Verify transition is immediately cancelled and toast is dismissed
+    expect(document.querySelector(".cm-transition-toast")).toBeNull();
+    expect(cm.currentMorphMode).toBeNull();
+
+    // 4. Advance time by 4.9 seconds - fallback engine should not be active yet
+    await vi.advanceTimersByTimeAsync(4900);
+    expect(addSpy).not.toHaveBeenCalledWith("mousemove", expect.any(Function));
+
+    // 5. Advance past 5 seconds total occlusion -> fallback engine must activate
+    await vi.advanceTimersByTimeAsync(200);
+    expect(addSpy).toHaveBeenCalledWith("mousemove", expect.any(Function));
+
+    // 6. Recover: emit high confidence (confidence >= 0.5)
+    addSpy.mockClear();
+    removeSpy.mockClear();
+    mockWorker._emit("message", {
+      type: "telemetry",
+      confidence: 0.9
+    });
+
+    // Fallback engine should be deactivated and webcam tracking resumed
+    expect(removeSpy).toHaveBeenCalledWith("mousemove", expect.any(Function));
+
+    cm.destroy();
+    vi.useRealTimers();
+  });
+
+  it("handles Off-Axis Posture: transitions to fallback engine if relative yaw/pitch exceeds 30 degrees, and resumes when returning below 30", async () => {
+    vi.useFakeTimers();
+
+    const addSpy = vi.spyOn(window, "addEventListener");
+    const removeSpy = vi.spyOn(window, "removeEventListener");
+
+    const cm = new CognitiveMorph({ worker: mockWorker, transitionDurationMs: 0 });
+    cm.boot();
+
+    await cm.setCameraActive(true);
+
+    // Feed calibration telemetry with yaw = 10, pitch = 5
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(2000);
+      mockWorker._emit("message", {
+        type: "telemetry",
+        eyeAperture: 0.4,
+        blinkInterval: 4000,
+        yaw: 10,
+        pitch: 5,
+        confidence: 1.0
+      });
+    }
+
+    expect((cm as any).baselineYaw).toBeCloseTo(10);
+    expect((cm as any).baselinePitch).toBeCloseTo(5);
+
+    addSpy.mockClear();
+    removeSpy.mockClear();
+
+    // Send telemetry with yaw = 41 (relative yaw = 31 > 30)
+    mockWorker._emit("message", {
+      type: "telemetry",
+      confidence: 1.0,
+      yaw: 41,
+      pitch: 5
+    });
+
+    expect(addSpy).toHaveBeenCalledWith("mousemove", expect.any(Function));
+    addSpy.mockClear();
+    removeSpy.mockClear();
+
+    // Send telemetry with yaw = 15 (relative yaw = 5 <= 30)
+    mockWorker._emit("message", {
+      type: "telemetry",
+      confidence: 1.0,
+      yaw: 15,
+      pitch: 5
+    });
+
+    expect(removeSpy).toHaveBeenCalledWith("mousemove", expect.any(Function));
+
+    cm.destroy();
+    vi.useRealTimers();
+  });
+});
+
 
 
 
