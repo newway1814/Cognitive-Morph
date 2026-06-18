@@ -45,6 +45,8 @@ export class CognitiveMorph {
   private isOccludedFallbackActive = false;
   private isOffAxisFallbackActive = false;
   private occlusionTimer: any = null;
+  private occlusionStartedAt: number | null = null;
+  private calibrationPausedMs = 0;
 
   // Reflow blocker state variables
   private isActivelyScrolling = false;
@@ -154,6 +156,9 @@ export class CognitiveMorph {
         const confidence = event.data.confidence;
         if (confidence < 0.5) {
           this.isFaceOccluded = true;
+          if (this._calibrationProgress !== null && this.occlusionStartedAt === null) {
+            this.occlusionStartedAt = Date.now();
+          }
           this.cancelTransition();
           this.pendingMorphMode = null;
           if (!this.occlusionTimer) {
@@ -164,6 +169,10 @@ export class CognitiveMorph {
           }
         } else {
           this.isFaceOccluded = false;
+          if (this.occlusionStartedAt !== null) {
+            this.calibrationPausedMs += Date.now() - this.occlusionStartedAt;
+            this.occlusionStartedAt = null;
+          }
           if (this.occlusionTimer) {
             clearTimeout(this.occlusionTimer);
             this.occlusionTimer = null;
@@ -180,7 +189,7 @@ export class CognitiveMorph {
       }
 
       if (this._calibrationProgress !== null) {
-        const elapsed = Date.now() - (this.calibrationStartTime ?? Date.now());
+        const elapsed = Date.now() - (this.calibrationStartTime ?? Date.now()) - this.calibrationPausedMs;
 
         const { eyeAperture, blinkInterval, yaw, pitch } = event.data ?? {};
         if (eyeAperture !== undefined) this.calibrationEyeApertures.push(eyeAperture);
@@ -212,6 +221,8 @@ export class CognitiveMorph {
         if (Math.abs(relativeYaw) > 30 || Math.abs(relativePitch) > 30) {
           if (!this.isOffAxisFallbackActive) {
             this.isOffAxisFallbackActive = true;
+            this.cancelTransition();
+            this.pendingMorphMode = null;
             this.syncFallbackEngineState();
           }
         } else {
@@ -276,6 +287,8 @@ export class CognitiveMorph {
       this.calibrationBlinkIntervals = [];
       this.calibrationYaws = [];
       this.calibrationPitches = [];
+      this.calibrationPausedMs = 0;
+      this.occlusionStartedAt = null;
       this.setCalibrationProgress(0);
 
       if (!this.worker) {
@@ -315,6 +328,8 @@ export class CognitiveMorph {
       this.baselineBlinkInterval = null;
       this.baselineYaw = null;
       this.baselinePitch = null;
+      this.calibrationPausedMs = 0;
+      this.occlusionStartedAt = null;
       this.setCalibrationProgress(null);
     }
 

@@ -1245,6 +1245,102 @@ describe("Face Occlusion & Off-Axis Adaptive Baselines", () => {
     cm.destroy();
     vi.useRealTimers();
   });
+
+  it("pauses calibration timer during Face Occlusion so calibration requires 10 seconds of unoccluded tracking", async () => {
+    vi.useFakeTimers();
+
+    const cm = new CognitiveMorph({ worker: mockWorker, transitionDurationMs: 0 });
+    cm.boot();
+    await cm.setCameraActive(true);
+
+    const widgetLabel = document.querySelector(".cm-status-label");
+
+    // 1. Send good telemetry at T=3s — 3 seconds of real calibration data
+    await vi.advanceTimersByTimeAsync(3000);
+    mockWorker._emit("message", {
+      type: "telemetry",
+      eyeAperture: 0.4,
+      blinkInterval: 4000,
+      yaw: 10,
+      pitch: 5,
+      confidence: 1.0
+    });
+    expect(widgetLabel?.textContent).toBe("Calibrating 30%");
+
+    // 2. Face becomes occluded at T=4s (confidence drops below 0.5)
+    await vi.advanceTimersByTimeAsync(1000);
+    mockWorker._emit("message", {
+      type: "telemetry",
+      confidence: 0.2
+    });
+
+    // 3. Advance to T=11s (past naive 10s window) and recover with good data
+    await vi.advanceTimersByTimeAsync(7000);
+    mockWorker._emit("message", {
+      type: "telemetry",
+      eyeAperture: 0.4,
+      blinkInterval: 4000,
+      yaw: 10,
+      pitch: 5,
+      confidence: 1.0
+    });
+
+    // Calibration should NOT be complete — only ~3s of unoccluded data was collected.
+    // The 7s of occlusion must not count toward the 10s calibration window.
+    expect(widgetLabel?.textContent).toContain("Calibrating");
+
+    cm.destroy();
+    vi.useRealTimers();
+  });
+
+  it("cancels pending transition when head goes Off-Axis, since camera telemetry becomes unreliable", async () => {
+    vi.useFakeTimers();
+
+    const cm = new CognitiveMorph({ worker: mockWorker, transitionDurationMs: 3000 });
+    cm.boot();
+    await cm.setCameraActive(true);
+
+    // Complete calibration with baseline yaw=10, pitch=5
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(2000);
+      mockWorker._emit("message", {
+        type: "telemetry",
+        eyeAperture: 0.4,
+        blinkInterval: 4000,
+        yaw: 10,
+        pitch: 5,
+        confidence: 1.0
+      });
+    }
+
+    // Trigger a transition → toast should appear with countdown
+    mockWorker._emit("message", {
+      type: "morphModeChange",
+      morphMode: "focus-reading"
+    });
+
+    expect(document.querySelector(".cm-transition-toast")).not.toBeNull();
+    expect(cm.currentMorphMode).toBeNull();
+
+    // Head goes off-axis (yaw=41, relative yaw=31 > 30°)
+    mockWorker._emit("message", {
+      type: "telemetry",
+      confidence: 1.0,
+      yaw: 41,
+      pitch: 5
+    });
+
+    // Pending transition should be cancelled — camera data that triggered it is unreliable
+    expect(document.querySelector(".cm-transition-toast")).toBeNull();
+    expect(cm.currentMorphMode).toBeNull();
+
+    // Advance past original countdown — transition must NOT apply
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(cm.currentMorphMode).toBeNull();
+
+    cm.destroy();
+    vi.useRealTimers();
+  });
 });
 
 
