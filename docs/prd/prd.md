@@ -22,6 +22,8 @@ Standard web page layouts are static and rigid, failing to adapt to a user's dyn
    * Adapts baselines to off-axis head angles (multi-monitor setups), falling back to the Telemetry Fallback Engine if yaw/pitch exceeds 30 degrees.
 8. **User Overrides & Control Interface**: A Telemetry Status Widget that displays tracking status, allows manual Morph Mode lock/pause, and shows a 3-second countdown toast prior to automated Morph Mode transitions.
 9. **SDK & Bundle Distribution**: Shipped as a programmatic JS SDK class for frontend application framework integration and a self-initializing CDN script tag for static web pages.
+10. **Hybrid Settings Persistence**: Persists user control configuration overrides (like manual mode locks) in `localStorage` across page loads, but recalculates passive calibration baselines fresh on webcam initialization.
+11. **CDN-Managed Model Caching**: Uses version-locked public CDN paths for model weights and leverages standard HTTP Cache-Control headers to cache the model files in the browser's native cache.
 
 ## 4. Explicit Non-Goals
 * **No Server/Cloud Analytics**: Raw video frames or coordinates are never transmitted, cached, or stored on servers.
@@ -35,6 +37,5 @@ Standard web page layouts are static and rigid, failing to adapt to a user's dyn
 * **Visual Stability**: Layout shifting must not cause distracting Cumulative Layout Shift (CLS) during active focus.
 
 ## 6. Open Questions Remaining
-1. **State Persistence**: Should user calibration metrics, baseline thresholds, and manual mode locks be persisted across page refreshes via `localStorage`?
-2. **Model Caching**: Can we cache the MediaPipe model weights in the browser's Cache API or IndexedDB to prevent network requests on subsequent visits?
-3. **Developer API Customization**: How will the initialization API structure look for threshold tuning (e.g., setting custom debounce windows or custom baseline durations)?
+1. **Developer API Customization**: How will the initialization API structure look for threshold tuning (e.g., setting custom debounce windows or custom baseline durations)?
+
