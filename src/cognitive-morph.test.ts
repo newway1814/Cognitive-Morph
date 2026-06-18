@@ -42,7 +42,7 @@ describe("CognitiveMorph SDK bootstrap", () => {
 
   beforeEach(() => {
     mockWorker = createMockWorker();
-    cm = new CognitiveMorph({ worker: mockWorker });
+    cm = new CognitiveMorph({ worker: mockWorker, transitionDurationMs: 0 });
   });
 
   it("can be instantiated with a custom mock worker", () => {
@@ -90,7 +90,7 @@ describe("Declarative Markup & Global CSS State Toggling", () => {
   beforeEach(() => {
     document.body.className = "";
     mockWorker = createMockWorker();
-    cm = new CognitiveMorph({ worker: mockWorker });
+    cm = new CognitiveMorph({ worker: mockWorker, transitionDurationMs: 0 });
     cm.boot();
   });
 
@@ -160,7 +160,7 @@ describe("Telemetry Fallback Engine", () => {
 
   beforeEach(() => {
     mockWorker = createMockWorker();
-    cm = new CognitiveMorph({ worker: mockWorker });
+    cm = new CognitiveMorph({ worker: mockWorker, transitionDurationMs: 0 });
   });
 
   afterEach(() => {
@@ -306,7 +306,7 @@ describe("Layout Reflow Anchors & Scroll Anchoring", () => {
 
   beforeEach(() => {
     mockWorker = createMockWorker();
-    cm = new CognitiveMorph({ worker: mockWorker });
+    cm = new CognitiveMorph({ worker: mockWorker, transitionDurationMs: 0 });
   });
 
   afterEach(() => {
@@ -469,3 +469,389 @@ describe("Layout Reflow Anchors & Scroll Anchoring", () => {
     scrollToSpy.mockRestore();
   });
 });
+
+describe("Transition Preview Toast & User Override", () => {
+  let mockWorker: ReturnType<typeof createMockWorker>;
+  let cm: CognitiveMorph;
+
+  beforeEach(() => {
+    document.body.className = "";
+    const toast = document.querySelector(".cm-transition-toast");
+    if (toast) toast.remove();
+    mockWorker = createMockWorker();
+    cm = new CognitiveMorph({ worker: mockWorker });
+  });
+
+  afterEach(() => {
+    cm.destroy();
+    const toast = document.querySelector(".cm-transition-toast");
+    if (toast) toast.remove();
+  });
+
+  it("displays transition preview toast in the DOM and defers the morph mode transition", () => {
+    cm.boot();
+    expect(document.querySelector(".cm-transition-toast")).toBeNull();
+    expect(cm.currentMorphMode).toBeNull();
+
+    // Trigger transition to focus-reading
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "focus-reading" });
+
+    // Toast element should be in the DOM
+    const toast = document.querySelector(".cm-transition-toast");
+    expect(toast).not.toBeNull();
+
+    // Transition should be deferred (not applied yet)
+    expect(cm.currentMorphMode).toBeNull();
+    expect(document.body.classList.contains("cm-mode-focus-reading")).toBe(false);
+  });
+
+  it("updates the toast countdown text dynamically every second", () => {
+    vi.useFakeTimers();
+    // Re-create cm with custom 3000ms duration
+    cm = new CognitiveMorph({ worker: mockWorker, transitionDurationMs: 3000 });
+    cm.boot();
+
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "focus-reading" });
+
+    const toast = document.querySelector(".cm-transition-toast");
+    expect(toast).not.toBeNull();
+    const textEl = toast!.querySelector(".cm-toast-text");
+    expect(textEl?.textContent).toBe("Entering Focus Reading Mode in 3s...");
+
+    // Advance by 1 second
+    vi.advanceTimersByTime(1000);
+    expect(textEl?.textContent).toBe("Entering Focus Reading Mode in 2s...");
+
+    // Advance by another second
+    vi.advanceTimersByTime(1000);
+    expect(textEl?.textContent).toBe("Entering Focus Reading Mode in 1s...");
+
+  });
+
+  it("applies the morph mode and dismisses the toast when countdown completes", () => {
+    vi.useFakeTimers();
+    cm = new CognitiveMorph({ worker: mockWorker, transitionDurationMs: 3000 });
+    cm.boot();
+
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "focus-reading" });
+    
+    expect(document.querySelector(".cm-transition-toast")).not.toBeNull();
+    expect(cm.currentMorphMode).toBeNull();
+
+    // Advance to completion (3000ms)
+    vi.advanceTimersByTime(3000);
+
+    // Toast should be dismissed
+    expect(document.querySelector(".cm-transition-toast")).toBeNull();
+    // Morph mode should be applied
+    expect(cm.currentMorphMode).toBe("focus-reading");
+    expect(document.body.classList.contains("cm-mode-focus-reading")).toBe(true);
+
+  });
+
+  it("cancels transition, dismisses toast, and keeps previous mode when Undo is clicked", () => {
+    vi.useFakeTimers();
+    cm = new CognitiveMorph({ worker: mockWorker, transitionDurationMs: 3000 });
+    cm.boot();
+
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "focus-reading" });
+
+    const toast = document.querySelector(".cm-transition-toast");
+    expect(toast).not.toBeNull();
+    const undoBtn = toast!.querySelector(".cm-toast-undo") as HTMLButtonElement;
+    expect(undoBtn).not.toBeNull();
+
+    // Click Undo
+    undoBtn.click();
+
+    // Toast should be removed immediately
+    expect(document.querySelector(".cm-transition-toast")).toBeNull();
+    expect(cm.currentMorphMode).toBeNull();
+
+    // Advance 3000ms and verify it is NOT applied
+    vi.advanceTimersByTime(3000);
+    expect(cm.currentMorphMode).toBeNull();
+    expect(document.body.classList.contains("cm-mode-focus-reading")).toBe(false);
+
+  });
+
+  it("cancels transition, dismisses toast, and keeps previous mode when cancelTransition() is called programmatically", () => {
+    vi.useFakeTimers();
+    cm = new CognitiveMorph({ worker: mockWorker, transitionDurationMs: 3000 });
+    cm.boot();
+
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "focus-reading" });
+
+    expect(document.querySelector(".cm-transition-toast")).not.toBeNull();
+
+    // Call cancelTransition programmatically
+    cm.cancelTransition();
+
+    // Toast should be removed immediately
+    expect(document.querySelector(".cm-transition-toast")).toBeNull();
+    expect(cm.currentMorphMode).toBeNull();
+
+    // Advance 3000ms and verify it is NOT applied
+    vi.advanceTimersByTime(3000);
+    expect(cm.currentMorphMode).toBeNull();
+    expect(document.body.classList.contains("cm-mode-focus-reading")).toBe(false);
+
+  });
+
+  it("resets active transition and starts a new countdown if a different morph mode is queued", () => {
+    vi.useFakeTimers();
+    cm = new CognitiveMorph({ worker: mockWorker, transitionDurationMs: 3000 });
+    cm.boot();
+
+    // Trigger transition to focus-reading
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "focus-reading" });
+    
+    let toast = document.querySelector(".cm-transition-toast");
+    expect(toast).not.toBeNull();
+    let textEl = toast!.querySelector(".cm-toast-text");
+    expect(textEl?.textContent).toBe("Entering Focus Reading Mode in 3s...");
+
+    // Advance 1000ms
+    vi.advanceTimersByTime(1000);
+    expect(textEl?.textContent).toBe("Entering Focus Reading Mode in 2s...");
+
+    // Trigger transition to skimming
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "skimming" });
+
+    // Toast should be recreated/updated and reset to 3s for Skimming Mode
+    toast = document.querySelector(".cm-transition-toast");
+    expect(toast).not.toBeNull();
+    textEl = toast!.querySelector(".cm-toast-text");
+    expect(textEl?.textContent).toBe("Entering Skimming Mode in 3s...");
+
+    // Advance 3000ms
+    vi.advanceTimersByTime(3000);
+
+    // Skimming should be applied, focus-reading should not be applied
+    expect(document.querySelector(".cm-transition-toast")).toBeNull();
+    expect(cm.currentMorphMode).toBe("skimming");
+    expect(document.body.classList.contains("cm-mode-skimming")).toBe(true);
+    expect(document.body.classList.contains("cm-mode-focus-reading")).toBe(false);
+
+  });
+
+  it("transitions immediately and does not show toast when transitionDurationMs is 0", () => {
+    cm = new CognitiveMorph({ worker: mockWorker, transitionDurationMs: 0 });
+    cm.boot();
+
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "focus-reading" });
+
+    // Toast should not be in the DOM
+    expect(document.querySelector(".cm-transition-toast")).toBeNull();
+    // Morph mode should be applied immediately
+    expect(cm.currentMorphMode).toBe("focus-reading");
+    expect(document.body.classList.contains("cm-mode-focus-reading")).toBe(true);
+  });
+});
+
+describe("Telemetry Status Widget & Hybrid Settings Persistence", () => {
+  let mockWorker: ReturnType<typeof createMockWorker>;
+  let cm: CognitiveMorph;
+
+  beforeEach(() => {
+    localStorage.clear();
+    const widget = document.querySelector(".cm-status-widget");
+    if (widget) widget.remove();
+    mockWorker = createMockWorker();
+    cm = new CognitiveMorph({ worker: mockWorker });
+  });
+
+  afterEach(() => {
+    cm.destroy();
+    const widget = document.querySelector(".cm-status-widget");
+    if (widget) widget.remove();
+    localStorage.clear();
+  });
+
+  it("renders the Telemetry Status Widget in the DOM on boot and removes it on destroy", () => {
+    expect(document.querySelector(".cm-status-widget")).toBeNull();
+
+    cm.boot();
+
+    // Widget should be rendered
+    const widget = document.querySelector(".cm-status-widget");
+    expect(widget).not.toBeNull();
+
+    cm.destroy();
+
+    // Widget should be removed
+    expect(document.querySelector(".cm-status-widget")).toBeNull();
+  });
+
+  it("restores paused state from localStorage on boot", () => {
+    localStorage.setItem("cm-paused", "true");
+    cm = new CognitiveMorph({ worker: mockWorker });
+
+    // Before boot, it should not be active/read yet
+    expect(cm.isPaused).toBe(false);
+
+    cm.boot();
+
+    expect(cm.isPaused).toBe(true);
+
+    const checkbox = document.querySelector(".cm-status-widget input[type='checkbox']") as HTMLInputElement;
+    expect(checkbox).not.toBeNull();
+    expect(checkbox.checked).toBe(true);
+  });
+
+  it("restores manual Morph Mode lock from localStorage on boot", () => {
+    localStorage.setItem("cm-manual-lock", "focus-reading");
+    cm = new CognitiveMorph({ worker: mockWorker });
+
+    expect(cm.manualLock).toBeNull();
+
+    cm.boot();
+
+    expect(cm.manualLock).toBe("focus-reading");
+    expect(cm.currentMorphMode).toBe("focus-reading");
+    expect(document.body.classList.contains("cm-mode-focus-reading")).toBe(true);
+
+    const select = document.querySelector(".cm-status-widget select") as HTMLSelectElement;
+    expect(select).not.toBeNull();
+    expect(select.value).toBe("focus-reading");
+
+    // Telemetry messages should be blocked and not change the locked mode
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "skimming" });
+    expect(cm.currentMorphMode).toBe("focus-reading");
+    expect(document.body.classList.contains("cm-mode-skimming")).toBe(false);
+  });
+
+  it("toggles pause via widget checkbox and updates state and localStorage", () => {
+    cm = new CognitiveMorph({ worker: mockWorker });
+    cm.boot();
+
+    expect(cm.isPaused).toBe(false);
+
+    const checkbox = document.querySelector(".cm-status-widget input[type='checkbox']") as HTMLInputElement;
+    expect(checkbox).not.toBeNull();
+    expect(checkbox.checked).toBe(false);
+
+    // Simulate checking the checkbox
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change"));
+
+    expect(cm.isPaused).toBe(true);
+    expect(localStorage.getItem("cm-paused")).toBe("true");
+
+    // Simulate unchecking
+    checkbox.checked = false;
+    checkbox.dispatchEvent(new Event("change"));
+
+    expect(cm.isPaused).toBe(false);
+    expect(localStorage.getItem("cm-paused")).toBe("false");
+  });
+
+  it("sets manual lock via select dropdown and updates state and localStorage", () => {
+    cm = new CognitiveMorph({ worker: mockWorker });
+    cm.boot();
+
+    expect(cm.manualLock).toBeNull();
+    expect(cm.currentMorphMode).toBeNull();
+
+    const select = document.querySelector(".cm-status-widget select") as HTMLSelectElement;
+    expect(select).not.toBeNull();
+    expect(select.value).toBe("");
+
+    // Simulate selecting focus-reading
+    select.value = "focus-reading";
+    select.dispatchEvent(new Event("change"));
+
+    expect(cm.manualLock).toBe("focus-reading");
+    expect(cm.currentMorphMode).toBe("focus-reading");
+    expect(localStorage.getItem("cm-manual-lock")).toBe("focus-reading");
+    expect(document.body.classList.contains("cm-mode-focus-reading")).toBe(true);
+
+    // Telemetry messages should be blocked
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "skimming" });
+    expect(cm.currentMorphMode).toBe("focus-reading");
+  });
+
+  it("clears manual lock via select dropdown and restores automatic telemetry transitions", () => {
+    localStorage.setItem("cm-manual-lock", "focus-reading");
+    cm = new CognitiveMorph({ worker: mockWorker, transitionDurationMs: 0 });
+    cm.boot();
+
+    expect(cm.manualLock).toBe("focus-reading");
+    expect(cm.currentMorphMode).toBe("focus-reading");
+
+    const select = document.querySelector(".cm-status-widget select") as HTMLSelectElement;
+    expect(select).not.toBeNull();
+    expect(select.value).toBe("focus-reading");
+
+    // Simulate selecting "Automatic" (empty value)
+    select.value = "";
+    select.dispatchEvent(new Event("change"));
+
+    expect(cm.manualLock).toBeNull();
+    expect(localStorage.getItem("cm-manual-lock")).toBeNull();
+
+    // Telemetry messages should now transition again
+    mockWorker._emit("message", { type: "morphModeChange", morphMode: "skimming" });
+    expect(cm.currentMorphMode).toBe("skimming");
+    expect(document.body.classList.contains("cm-mode-skimming")).toBe(true);
+  });
+
+  it("updates widget styling and text on calibration progress changes", () => {
+    cm = new CognitiveMorph({ worker: mockWorker });
+    cm.boot();
+
+    const label = document.querySelector(".cm-status-label");
+    const indicator = document.querySelector(".cm-status-indicator");
+    expect(label).not.toBeNull();
+    expect(indicator).not.toBeNull();
+
+    // Set calibration progress
+    cm.setCalibrationProgress(50);
+    expect(label!.textContent).toBe("Calibrating 50%");
+    expect(indicator!.classList.contains("cm-status-calibrating")).toBe(true);
+
+    // Set to 100
+    cm.setCalibrationProgress(100);
+    expect(label!.textContent).toBe("Calibrating 100%");
+
+    // Complete calibration (null)
+    cm.setCalibrationProgress(null);
+    cm.setCameraActive(true);
+    expect(label!.textContent).toBe("Active");
+    expect(indicator!.classList.contains("cm-status-active")).toBe(true);
+
+    // Pause it
+    cm.setPaused(true);
+    expect(label!.textContent).toBe("Paused");
+    expect(indicator!.classList.contains("cm-status-paused")).toBe(true);
+
+    // Unpause but set manual lock
+    cm.setPaused(false);
+    cm.setManualLock("focus-reading");
+    expect(label!.textContent).toBe("Locked");
+    expect(indicator!.classList.contains("cm-status-locked")).toBe(true);
+  });
+
+  it("does not persist calibration progress on webcam start", () => {
+    cm = new CognitiveMorph({ worker: mockWorker });
+    cm.boot();
+    cm.setCalibrationProgress(50);
+    expect(document.querySelector(".cm-status-label")?.textContent).toBe("Calibrating 50%");
+
+    cm.destroy();
+
+    const cm2 = new CognitiveMorph({ worker: mockWorker });
+    cm2.boot();
+    // It should boot into default status (not calibrating)
+    expect(document.querySelector(".cm-status-label")?.textContent).not.toContain("Calibrating");
+    cm2.destroy();
+  });
+});
+
+
+
+
+
+
+
+

@@ -1,7 +1,14 @@
 import { TelemetryFallbackEngine } from "./fallback-engine";
 
+const MORPH_MODE_NAMES: Record<string, string> = {
+  "focus-reading": "Focus Reading Mode",
+  "skimming": "Skimming Mode",
+  "fatigue-mitigation": "Fatigue Mitigation Mode",
+};
+
 export interface CognitiveMorphOptions {
   worker: Worker;
+  transitionDurationMs?: number;
 }
 
 export type MorphModeCallback = (morphMode: string) => void;
@@ -13,6 +20,9 @@ export class CognitiveMorph {
   private handleMessage: ((event: MessageEvent) => void) | null = null;
   private _morphMode: string | null = null;
   private _cameraActive = false;
+  private _paused = false;
+  private _manualLock: string | null = null;
+  private _calibrationProgress: number | null = null;
 
   // Reflow blocker state variables
   private isActivelyScrolling = false;
@@ -20,6 +30,16 @@ export class CognitiveMorph {
   private pendingMorphMode: string | null = null;
   private scrollPauseTimer: any = null;
   private isProgrammaticScroll = false;
+
+  // Transition Preview Toast & User Override states
+  private transitionTimer: any = null;
+  private transitionCountdownTimer: any = null;
+  private transitionPreviewToast: HTMLElement | null = null;
+  private transitionDurationMs = 3000;
+  private activeTransitionTarget: string | null = null;
+
+  // Status Widget & settings state
+  private statusWidget: HTMLElement | null = null;
 
   // Getter for Target Reading Element based on data-morph attribute
   private get targetReadingElement(): Element | null {
@@ -56,8 +76,17 @@ export class CognitiveMorph {
     return this._cameraActive;
   }
 
+  get isPaused(): boolean {
+    return this._paused;
+  }
+
+  get manualLock(): string | null {
+    return this._manualLock;
+  }
+
   constructor(options: CognitiveMorphOptions) {
     this.worker = options.worker;
+    this.transitionDurationMs = options.transitionDurationMs ?? 3000;
     this.fallbackEngine = new TelemetryFallbackEngine((userVisualState) => {
       // Map User Visual State to Morph Mode
       let targetMode = "";
@@ -77,6 +106,7 @@ export class CognitiveMorph {
 
   boot(): void {
     this.handleMessage = (event: MessageEvent) => {
+      if (this._paused) return;
       const { type, morphMode, eyeMovement } = event.data ?? {};
       if (type === "extendedBlink") {
         this.triggerReflowAnchor();
@@ -96,29 +126,131 @@ export class CognitiveMorph {
       this.handleMessage as EventListener,
     );
 
+    const savedPaused = localStorage.getItem("cm-paused");
+    if (savedPaused === "true") {
+      this._paused = true;
+    }
+
+    const savedLock = localStorage.getItem("cm-manual-lock");
+    if (savedLock) {
+      this._manualLock = savedLock;
+    }
+
+    if (this._manualLock) {
+      this.applyMorphMode(this._manualLock);
+    }
+
     window.removeEventListener("scroll", this.handleScrollActivity);
     window.addEventListener("scroll", this.handleScrollActivity);
 
-    if (!this._cameraActive) {
-      this.fallbackEngine.activate();
-    }
+    this.syncFallbackEngineState();
+
+    this.renderStatusWidget();
   }
 
   setCameraActive(active: boolean): void {
     if (this._cameraActive === active) return;
     this._cameraActive = active;
 
-    if (active) {
-      this.fallbackEngine.deactivate();
+    this.syncFallbackEngineState();
+    this.updateWidgetUI();
+  }
+
+  setPaused(paused: boolean): void {
+    if (this._paused === paused) return;
+    this._paused = paused;
+
+    localStorage.setItem("cm-paused", paused ? "true" : "false");
+
+    if (paused) {
+      this.cancelTransition();
+    }
+    this.syncFallbackEngineState();
+    this.updateWidgetUI();
+  }
+
+  setManualLock(mode: string | null): void {
+    const targetMode = mode || null;
+    if (this._manualLock === targetMode) return;
+    this._manualLock = targetMode;
+
+    if (targetMode) {
+      localStorage.setItem("cm-manual-lock", targetMode);
+      this.cancelTransition();
+      this.applyMorphMode(targetMode);
     } else {
-      // Reactivate fallback only if booted
-      if (this.handleMessage) {
-        this.fallbackEngine.activate();
+      localStorage.removeItem("cm-manual-lock");
+    }
+    this.syncFallbackEngineState();
+    this.updateWidgetUI();
+  }
+
+  setCalibrationProgress(progress: number | null): void {
+    this._calibrationProgress = progress;
+    this.updateWidgetUI();
+  }
+
+  private syncFallbackEngineState(): void {
+    const shouldActivate =
+      this.handleMessage &&
+      !this._cameraActive &&
+      !this._paused &&
+      !this._manualLock;
+    if (shouldActivate) {
+      this.fallbackEngine.activate();
+    } else {
+      this.fallbackEngine.deactivate();
+    }
+  }
+
+  private updateWidgetUI(): void {
+    if (!this.statusWidget) return;
+
+    const checkbox = this.statusWidget.querySelector("input[type='checkbox']") as HTMLInputElement | null;
+    if (checkbox) {
+      checkbox.checked = this._paused;
+    }
+
+    const select = this.statusWidget.querySelector("select") as HTMLSelectElement | null;
+    if (select) {
+      select.value = this._manualLock ?? "";
+    }
+
+    const label = this.statusWidget.querySelector(".cm-status-label") as HTMLElement | null;
+    const indicator = this.statusWidget.querySelector(".cm-status-indicator") as HTMLElement | null;
+
+    if (label && indicator) {
+      let statusText = "Ready";
+      let statusClass = "cm-status-ready";
+
+      if (this._calibrationProgress !== null) {
+        statusText = `Calibrating ${this._calibrationProgress}%`;
+        statusClass = "cm-status-calibrating";
+      } else if (this._paused) {
+        statusText = "Paused";
+        statusClass = "cm-status-paused";
+      } else if (this._manualLock) {
+        statusText = "Locked";
+        statusClass = "cm-status-locked";
+      } else if (this._cameraActive) {
+        statusText = "Active";
+        statusClass = "cm-status-active";
       }
+
+      indicator.classList.remove(
+        "cm-status-ready",
+        "cm-status-calibrating",
+        "cm-status-paused",
+        "cm-status-locked",
+        "cm-status-active"
+      );
+      indicator.classList.add(statusClass);
+      label.textContent = statusText;
     }
   }
 
   destroy(): void {
+    this.cancelTransition();
     if (this.handleMessage) {
       this.worker.removeEventListener(
         "message",
@@ -138,18 +270,98 @@ export class CognitiveMorph {
       document.body.classList.remove(`cm-mode-${this._morphMode}`);
       this._morphMode = null;
     }
+    this.removeStatusWidget();
   }
 
-  private transitionToMorphMode(targetMode: string): void {
-    if (targetMode === this._morphMode) return;
+  public cancelTransition(): void {
+    if (this.transitionTimer) {
+      clearTimeout(this.transitionTimer);
+      this.transitionTimer = null;
+    }
+    if (this.transitionCountdownTimer) {
+      clearInterval(this.transitionCountdownTimer);
+      this.transitionCountdownTimer = null;
+    }
+    this.dismissTransitionPreviewToast();
+    this.activeTransitionTarget = null;
+  }
 
-    // Transition Anchoring Invariant: do not reflow layout while user is scrolling or moving eyes
-    if (this.isActivelyScrolling || this.isEyeMovementActive) {
-      this.pendingMorphMode = targetMode;
-      return;
+  private dismissTransitionPreviewToast(): void {
+    if (this.transitionPreviewToast) {
+      this.transitionPreviewToast.remove();
+      this.transitionPreviewToast = null;
+    }
+  }
+
+  private transitionToMorphMode(targetMode: string, bypassAnchorCheck = false): void {
+    if (this._paused || this._manualLock) return;
+    if (targetMode === this._morphMode || targetMode === this.activeTransitionTarget) return;
+
+    if (!bypassAnchorCheck) {
+      // Transition Anchoring Invariant: do not reflow layout while user is scrolling or moving eyes
+      if (this.isActivelyScrolling || this.isEyeMovementActive) {
+        this.pendingMorphMode = targetMode;
+        return;
+      }
     }
 
-    this.applyMorphMode(targetMode);
+    if (this.transitionDurationMs <= 0) {
+      this.applyMorphMode(targetMode);
+    } else {
+      this.startTransitionPreviewCountdown(targetMode);
+    }
+  }
+
+  private startTransitionPreviewCountdown(targetMode: string): void {
+    this.cancelTransition();
+    this.activeTransitionTarget = targetMode;
+
+    const modeName = MORPH_MODE_NAMES[targetMode] ?? targetMode;
+
+    const toast = document.createElement("div");
+    toast.className = "cm-transition-toast";
+    toast.style.setProperty('--cm-toast-duration', `${this.transitionDurationMs}ms`);
+
+    const textSpan = document.createElement("span");
+    textSpan.className = "cm-toast-text";
+    
+    let secondsLeft = Math.ceil(this.transitionDurationMs / 1000);
+    textSpan.textContent = `Entering ${modeName} in ${secondsLeft}s...`;
+
+    const progressContainer = document.createElement("div");
+    progressContainer.className = "cm-toast-progress-container";
+    const progressBar = document.createElement("div");
+    progressBar.className = "cm-toast-progress-bar";
+    progressContainer.appendChild(progressBar);
+
+    const undoButton = document.createElement("button");
+    undoButton.className = "cm-toast-undo";
+    undoButton.textContent = "Undo";
+    undoButton.addEventListener("click", () => {
+      this.cancelTransition();
+    });
+
+    toast.appendChild(textSpan);
+    toast.appendChild(progressContainer);
+    toast.appendChild(undoButton);
+    document.body.appendChild(toast);
+    this.transitionPreviewToast = toast;
+
+    this.transitionCountdownTimer = setInterval(() => {
+      secondsLeft--;
+      if (secondsLeft > 0) {
+        textSpan.textContent = `Entering ${modeName} in ${secondsLeft}s...`;
+      } else {
+        clearInterval(this.transitionCountdownTimer);
+        this.transitionCountdownTimer = null;
+      }
+    }, 1000);
+
+    this.transitionTimer = setTimeout(() => {
+      this.applyMorphMode(targetMode);
+      this.dismissTransitionPreviewToast();
+      this.activeTransitionTarget = null;
+    }, this.transitionDurationMs);
   }
 
   private applyMorphMode(targetMode: string): void {
@@ -190,7 +402,85 @@ export class CognitiveMorph {
     if (this.pendingMorphMode) {
       const targetMode = this.pendingMorphMode;
       this.pendingMorphMode = null;
-      this.applyMorphMode(targetMode);
+      this.transitionToMorphMode(targetMode, true);
+    }
+  }
+
+  private renderStatusWidget(): void {
+    if (document.querySelector(".cm-status-widget")) return;
+    const widget = document.createElement("div");
+    widget.className = "cm-status-widget";
+
+    const indicator = document.createElement("span");
+    indicator.className = "cm-status-indicator";
+    widget.appendChild(indicator);
+
+    const label = document.createElement("span");
+    label.className = "cm-status-label";
+    widget.appendChild(label);
+
+    const toggleContainer = document.createElement("label");
+    toggleContainer.className = "cm-status-toggle-container";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = this._paused;
+    checkbox.addEventListener("change", () => {
+      this.setPaused(checkbox.checked);
+    });
+    toggleContainer.appendChild(checkbox);
+    const toggleLabel = document.createElement("span");
+    toggleLabel.className = "cm-status-toggle-label";
+    toggleLabel.textContent = "Pause";
+    toggleContainer.appendChild(toggleLabel);
+    widget.appendChild(toggleContainer);
+
+    const selectContainer = document.createElement("div");
+    selectContainer.className = "cm-status-select-container";
+    const selectLabel = document.createElement("span");
+    selectLabel.className = "cm-status-select-label";
+    selectLabel.textContent = "Lock:";
+    selectContainer.appendChild(selectLabel);
+
+    const select = document.createElement("select");
+    const optAuto = document.createElement("option");
+    optAuto.value = "";
+    optAuto.textContent = "Automatic";
+    select.appendChild(optAuto);
+
+    const optFocus = document.createElement("option");
+    optFocus.value = "focus-reading";
+    optFocus.textContent = "Focus Reading Mode";
+    select.appendChild(optFocus);
+
+    const optSkim = document.createElement("option");
+    optSkim.value = "skimming";
+    optSkim.textContent = "Skimming Mode";
+    select.appendChild(optSkim);
+
+    const optFatigue = document.createElement("option");
+    optFatigue.value = "fatigue-mitigation";
+    optFatigue.textContent = "Fatigue Mitigation Mode";
+    select.appendChild(optFatigue);
+
+    select.value = this._manualLock ?? "";
+    select.addEventListener("change", () => {
+      this.setManualLock(select.value || null);
+    });
+    selectContainer.appendChild(select);
+    widget.appendChild(selectContainer);
+
+    document.body.appendChild(widget);
+    this.statusWidget = widget;
+    this.updateWidgetUI();
+  }
+
+  private removeStatusWidget(): void {
+    if (this.statusWidget) {
+      this.statusWidget.remove();
+      this.statusWidget = null;
+    } else {
+      const widget = document.querySelector(".cm-status-widget");
+      if (widget) widget.remove();
     }
   }
 }

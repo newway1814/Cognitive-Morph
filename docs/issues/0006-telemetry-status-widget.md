@@ -1,4 +1,4 @@
-# 0006: Telemetry Status Widget & Hybrid Settings Persistence
+# 0006: Telemetry Status Widget & Hybrid Settings Persistence — ✅ DONE
 
 ## What to build
 
@@ -6,14 +6,14 @@ Implement the floating **Telemetry Status Widget** UI and **Hybrid Settings Pers
 
 ## Acceptance criteria
 
-- [ ] A floating visual widget is rendered in the bottom-right of the viewport using curated modern styling (e.g., glassmorphism, indicators changing color based on state: Calibrating, Active, Paused, or Manual Mode Lock).
-- [ ] The widget includes interactive controls:
+- [x] A floating visual widget is rendered in the bottom-right of the viewport using curated modern styling (e.g., glassmorphism, indicators changing color based on state: Calibrating, Active, Paused, or Manual Mode Lock).
+- [x] The widget includes interactive controls:
   - Toggle to pause/resume webcam tracking.
   - Dropdown/button array to manually force-lock a specific **Morph Mode**.
-- [ ] Manual locks and pauses are persisted in `localStorage`. On boot, the SDK restores these configurations.
-- [ ] When a manual Morph Mode lock is active, automated telemetry-based layout shifts are blocked.
-- [ ] Passive baseline calibration values are excluded from `localStorage` persistence, ensuring they are recalculated from scratch on every webcam start.
-- [ ] Automated tests assert that setting a manual override in the widget writes to `localStorage`, and that booting the SDK with pre-existing `localStorage` values restores the widget configuration and locks the Morph Mode.
+- [x] Manual locks and pauses are persisted in `localStorage`. On boot, the SDK restores these configurations.
+- [x] When a manual Morph Mode lock is active, automated telemetry-based layout shifts are blocked.
+- [x] Passive baseline calibration values are excluded from `localStorage` persistence, ensuring they are recalculated from scratch on every webcam start.
+- [x] Automated tests assert that setting a manual override in the widget writes to `localStorage`, and that booting the SDK with pre-existing `localStorage` values restores the widget configuration and locks the Morph Mode.
 
 ## Blocked by
 
