@@ -24,20 +24,15 @@ export class CognitiveMorph {
 
   constructor(options: CognitiveMorphOptions) {
     this.worker = options.worker;
-    this.fallbackEngine = new TelemetryFallbackEngine((state) => {
-      // Map visual state to morph mode
+    this.fallbackEngine = new TelemetryFallbackEngine((userVisualState) => {
+      // Map User Visual State to Morph Mode
       let targetMode = "";
-      if (state === "Focus") targetMode = "focus-reading";
-      else if (state === "Skimming") targetMode = "skimming";
-      else if (state === "Fatigue") targetMode = "fatigue-mitigation";
+      if (userVisualState === "Focus") targetMode = "focus-reading";
+      else if (userVisualState === "Skimming") targetMode = "skimming";
+      else if (userVisualState === "Fatigue") targetMode = "fatigue-mitigation";
 
-      if (targetMode && targetMode !== this._morphMode) {
-        if (this._morphMode) {
-          document.body.classList.remove(`cm-mode-${this._morphMode}`);
-        }
-        this._morphMode = targetMode;
-        document.body.classList.add(`cm-mode-${targetMode}`);
-        this.morphModeListeners.forEach((cb) => cb(targetMode));
+      if (targetMode) {
+        this.transitionToMorphMode(targetMode);
       }
     });
   }
@@ -50,12 +45,7 @@ export class CognitiveMorph {
     this.handleMessage = (event: MessageEvent) => {
       const { type, morphMode } = event.data ?? {};
       if (type === "morphModeChange" && morphMode) {
-        if (this._morphMode) {
-          document.body.classList.remove(`cm-mode-${this._morphMode}`);
-        }
-        this._morphMode = morphMode;
-        document.body.classList.add(`cm-mode-${morphMode}`);
-        this.morphModeListeners.forEach((cb) => cb(morphMode));
+        this.transitionToMorphMode(morphMode);
       }
     };
     this.worker.addEventListener(
@@ -95,5 +85,16 @@ export class CognitiveMorph {
       document.body.classList.remove(`cm-mode-${this._morphMode}`);
       this._morphMode = null;
     }
+  }
+
+  private transitionToMorphMode(targetMode: string): void {
+    if (targetMode === this._morphMode) return;
+    
+    if (this._morphMode) {
+      document.body.classList.remove(`cm-mode-${this._morphMode}`);
+    }
+    this._morphMode = targetMode;
+    document.body.classList.add(`cm-mode-${targetMode}`);
+    this.morphModeListeners.forEach((cb) => cb(targetMode));
   }
 }

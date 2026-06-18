@@ -22,9 +22,9 @@ export class TelemetryFallbackEngine {
   private evalIntervalId: any = null;
 
   // Hysteresis/Debounce State
-  private inferredState: string | null = null;
-  private stateStartTime: number | null = null;
-  private lastTriggeredState: string | null = null;
+  private inferredUserVisualState: string | null = null;
+  private userVisualStateStartTime: number | null = null;
+  private lastTriggeredUserVisualState: string | null = null;
 
   private handleMouseMove = (event: MouseEvent) => {
     const now = Date.now();
@@ -70,7 +70,7 @@ export class TelemetryFallbackEngine {
     this.hasKeyActivity = true;
   };
 
-  constructor(private onStateInferred: (state: string) => void) {}
+  constructor(private onUserVisualStateInferred: (userVisualState: string) => void) {}
 
   isActive(): boolean {
     return this.active;
@@ -95,15 +95,15 @@ export class TelemetryFallbackEngine {
     this.hasScrollActivity = false;
     this.hasKeyActivity = false;
 
-    this.inferredState = null;
-    this.stateStartTime = null;
-    this.lastTriggeredState = null;
+    this.inferredUserVisualState = null;
+    this.userVisualStateStartTime = null;
+    this.lastTriggeredUserVisualState = null;
 
     window.addEventListener("mousemove", this.handleMouseMove);
     window.addEventListener("scroll", this.handleScroll);
     window.addEventListener("keydown", this.handleKeyDown);
 
-    this.evalIntervalId = setInterval(() => this.evaluateState(), 100);
+    this.evalIntervalId = setInterval(() => this.evaluateUserVisualState(), 100);
   }
 
   deactivate(): void {
@@ -119,27 +119,27 @@ export class TelemetryFallbackEngine {
     }
   }
 
-  private evaluateState(): void {
+  private evaluateUserVisualState(): void {
     const now = Date.now();
     const idleTime = now - this.lastInteractionTime;
 
-    let candidateState: string | null = null;
+    let candidateUserVisualState: string | null = null;
     const maxMouseVel = this.mouseVelocities.length > 0 ? Math.max(...this.mouseVelocities) : 0;
     const maxScrollSpeed = this.scrollSpeeds.length > 0 ? Math.max(...this.scrollSpeeds) : 0;
     const maxScrollAcc = this.scrollAccelerations.length > 0 ? Math.max(...this.scrollAccelerations) : 0;
 
     // Determine state
     if (idleTime >= 3000) {
-      candidateState = "Fatigue";
+      candidateUserVisualState = "Fatigue";
     } else if (this.hasMouseActivity || this.hasScrollActivity || this.hasKeyActivity) {
       if (maxMouseVel > 1000 || maxScrollSpeed > 1500 || maxScrollAcc > 2000) {
-        candidateState = "Skimming";
+        candidateUserVisualState = "Skimming";
       } else {
-        candidateState = "Focus";
+        candidateUserVisualState = "Focus";
       }
     } else {
       // Retain the current inferred state during short pauses
-      candidateState = this.inferredState;
+      candidateUserVisualState = this.inferredUserVisualState;
     }
 
     // Reset tick activity flags
@@ -150,17 +150,17 @@ export class TelemetryFallbackEngine {
     this.scrollSpeeds = [];
     this.scrollAccelerations = [];
 
-    if (candidateState !== null) {
-      if (candidateState !== this.inferredState) {
-        this.inferredState = candidateState;
-        this.stateStartTime = now;
+    if (candidateUserVisualState !== null) {
+      if (candidateUserVisualState !== this.inferredUserVisualState) {
+        this.inferredUserVisualState = candidateUserVisualState;
+        this.userVisualStateStartTime = now;
       } else {
-        const heldDuration = now - (this.stateStartTime ?? now);
-        const requiredDuration = candidateState === "Fatigue" ? 3000 : 2000;
+        const heldDuration = now - (this.userVisualStateStartTime ?? now);
+        const requiredDuration = candidateUserVisualState === "Fatigue" ? 3000 : 2000;
         if (heldDuration >= requiredDuration) {
-          if (this.lastTriggeredState !== candidateState) {
-            this.lastTriggeredState = candidateState;
-            this.onStateInferred(candidateState);
+          if (this.lastTriggeredUserVisualState !== candidateUserVisualState) {
+            this.lastTriggeredUserVisualState = candidateUserVisualState;
+            this.onUserVisualStateInferred(candidateUserVisualState);
           }
         }
       }
