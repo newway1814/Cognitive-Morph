@@ -53,5 +53,14 @@ _Avoid_: Active calibration, spatial calibration, training phase
 The fallback detection engine that estimates the user's Visual State using device interaction telemetry (such as mouse velocity, scroll acceleration, and keyboard input cadence) when webcam access is denied or unavailable.
 _Avoid_: Webcam simulator, interaction tracker, device tracker
 
+**Tracking Occlusion**:
+The state where a user's face or eyes are blocked from the webcam (e.g. by hands, cups, or head turns), causing model confidence to drop and pausing active metric evaluations.
+_Avoid_: Landmark loss, camera block, sensor failure
+
+**Off-Axis Adaptive Baselines**:
+The calibration logic that measures and adapts to a user's resting yaw and pitch offset when their primary reading screen is offset from the webcam alignment.
+_Avoid_: Screen alignment, offset mapping, angle adjustment
+
+
 
 
